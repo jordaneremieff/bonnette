@@ -46,7 +46,7 @@ handler = Bonnette(App)
 
 ## Dependencies
 
-`azure-functions` - *required* for Azure Function support. Can be installed using:
+`azure-functions` - *required* for Azure Function support.
 
 ## Frameworks
 
