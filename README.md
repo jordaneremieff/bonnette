@@ -2,6 +2,14 @@
 
 ASGI adapter for Azure Functions.
 
+<a href="https://pypi.org/project/bonnette/">
+    <img src="https://badge.fury.io/py/bonnette.svg" alt="Package version">
+</a>
+<a href="https://travis-ci.org/erm/bonnette">
+    <img src="https://travis-ci.org/erm/bonnette.svg?branch=master" alt="Build Status">
+</a>
+
+
 **Requirements**: Python 3.6
 
 ## Installation
