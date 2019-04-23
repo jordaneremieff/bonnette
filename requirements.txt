@@ -3,6 +3,4 @@ pytest
 codecov
 pytest-cov
 black
-starlette
-quart
 azure-functions
