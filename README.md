@@ -22,6 +22,8 @@ pip3 install bonnette
 Bonnette consists of a single adapter class for using ASGI applications on Azure Functions.
 
 ```python
+import logging
+import azure.functions as func
 from bonnette import Bonnette
 
 
@@ -35,13 +37,14 @@ async def app(scope, receive, send):
         }
     )
     await send(
-        {
-            "type": "http.response.body",
-            "body": b"<html><h1>Hello, world!</h1></html>",
-        }
+        {"type": "http.response.body", "body": b"<html><h1>Hello, world!</h1></html>"}
     )
 
-handler = Bonnette(app)
+
+def main(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info("Python HTTP trigger function processed a request.")
+    handler = Bonnette(app)
+    return handler(req)
 ```
 
 ## Dependencies
