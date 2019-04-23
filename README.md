@@ -9,8 +9,6 @@ ASGI adapter for Azure Functions.
     <img src="https://travis-ci.org/erm/bonnette.svg?branch=master" alt="Build Status">
 </a>
 
-This adapter was originally part of [Mangum](https://github.com/erm/mangum), an adapter for ASGI support on AWS Lambda & API Gateway.
-
 **Requirements**: Python 3.6
 
 ## Installation
