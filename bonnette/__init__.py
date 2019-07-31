@@ -2,8 +2,21 @@ import urllib.parse
 import asyncio
 import enum
 import cgi
-from typing import Any
+import logging
+import typing
+
 from azure.functions import HttpRequest, HttpResponse
+
+
+def get_logger() -> logging.Logger:
+    logging.basicConfig(
+        format="[%(asctime)s] %(message)s",
+        level=logging.INFO,
+        datefmt="%d-%b-%y %H:%M:%S",
+    )
+    logger = logging.getLogger("bonnette")
+    logger.setLevel(logging.INFO)
+    return logger
 
 
 class ASGICycleState(enum.Enum):
@@ -29,7 +42,6 @@ class ASGICycle:
         """
         Receives the application and any body included in the request, then builds the
         ASGI instance using the connection scope.
-        Runs until the response is completely read from the application.
         """
         loop = asyncio.new_event_loop()
         self.app_queue = asyncio.Queue(loop=loop)
@@ -83,6 +95,7 @@ class ASGICycle:
             body = message.get("body", b"")
             more_body = message.get("more_body", False)
 
+            # The body must be completely read before returning the response.
             self.body += body
 
             if not more_body:
@@ -99,53 +112,101 @@ class ASGICycle:
         self.response["body"] = self.body
 
 
+class Lifespan:
+    def __init__(self, app: typing.Any, logger: logging.Logger) -> None:
+        self.app = app
+        self.logger = logger
+        self.startup_event: asyncio.Event = asyncio.Event()
+        self.shutdown_event: asyncio.Event = asyncio.Event()
+        self.app_queue: asyncio.Queue = asyncio.Queue()
+
+    async def run(self):
+        try:
+            await self.app({"type": "lifespan"}, self.receive, self.send)
+        except BaseException as exc:  # pragma: no cover
+            self.logger.error(f"Exception in 'lifespan' protocol: {exc}")
+        finally:
+            self.startup_event.set()
+            self.shutdown_event.set()
+
+    async def send(self, message: dict) -> None:
+        if message["type"] == "lifespan.startup.complete":
+            self.startup_event.set()
+        elif message["type"] == "lifespan.shutdown.complete":
+            self.shutdown_event.set()
+        else:  # pragma: no cover
+            raise RuntimeError(
+                f"Expected lifespan message type, received: {message['type']}"
+            )
+
+    async def receive(self) -> dict:
+        message = await self.app_queue.get()
+        return message
+
+    async def wait_startup(self):
+        self.logger.info("Waiting for application startup.")
+        await self.app_queue.put({"type": "lifespan.startup"})
+        await self.startup_event.wait()
+
+    async def wait_shutdown(self):
+        self.logger.info("Waiting for application shutdown.")
+        await self.app_queue.put({"type": "lifespan.shutdown"})
+        await self.shutdown_event.wait()
+
+
 class Bonnette:
-    """
-    A adapter that wraps an ASGI application and handles Azure Functions requests.
-
-    After building the connection scope, it runs the ASGI application cycle and then
-    serializes the response into an `HttpResponse`.
-    """
-
-    def __init__(self, app, debug: bool = False, spec_version: int = 3) -> None:
+    def __init__(
+        self,
+        app,
+        debug: bool = False,
+        spec_version: int = 3,
+        enable_lifespan: bool = True,
+    ) -> None:
         self.app = app
         self.debug = debug
         self.spec_version = spec_version
+        self.enable_lifespan = enable_lifespan
+        self.logger = get_logger()
 
-    def __call__(self, *args, **kwargs) -> Any:
+        if self.enable_lifespan:
+            loop = asyncio.get_event_loop()
+            self.lifespan = Lifespan(self.app, logger=self.logger)
+            loop.create_task(self.lifespan.run())
+            loop.run_until_complete(self.lifespan.wait_startup())
+
+    def __call__(self, event: HttpRequest) -> HttpResponse:
         try:
-            response = self.asgi(*args, **kwargs)
-        except Exception as exc:  # pragma: no cover
+            response = self.handler(event)
+        except BaseException as exc:  # pragma: no cover
             raise exc
         else:
             return response
 
-    def asgi(self, event: HttpRequest) -> dict:
-        server = None
-        client = None
-        scheme = "https"
-        method = event.method
-        headers = event.headers.items()
-        parsed = urllib.parse.urlparse(event.url)
-        scheme = parsed.scheme
-        path = parsed.path
+    def handler(self, event: HttpRequest) -> HttpResponse:
+        parsed_url = urllib.parse.urlparse(event.url)
         query_string = (
             urllib.parse.urlencode(event.params).encode() if event.params else b""
         )
         scope = {
             "type": "http",
-            "server": server,
-            "client": client,
-            "method": method,
-            "path": path,
-            "scheme": scheme,
+            "server": None,
+            "client": None,
+            "method": event.method,
+            "raw_path": None,
+            "path": parsed_url.path,
+            "scheme": parsed_url.scheme,
             "http_version": "1.1",
-            "root_path": "",
             "query_string": query_string,
-            "headers": [[k.encode(), v.encode()] for k, v in headers],
+            "headers": [[k.encode(), v.encode()] for k, v in event.headers.items()],
         }
         body = event.get_body() or b""
-        response = ASGICycle(scope, spec_version=self.spec_version)(self.app, body=body)
+        asgi_cycle = ASGICycle(scope, spec_version=self.spec_version)
+        response = asgi_cycle(self.app, body=body)
+
+        if self.enable_lifespan:
+            loop = asyncio.get_event_loop()
+            loop.run_until_complete(self.lifespan.wait_shutdown())
+
         return HttpResponse(
             body=response["body"],
             headers=response["headers"],
