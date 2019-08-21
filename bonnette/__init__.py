@@ -8,6 +8,13 @@ import typing
 from azure.functions import HttpRequest, HttpResponse
 
 
+Scope = typing.Dict[str, typing.Any]
+Message = typing.Dict[str, typing.Any]
+Receive = typing.Callable[[], typing.Awaitable[Message]]
+Send = typing.Callable[[Message], typing.Awaitable[None]]
+App = typing.Callable[[Scope, Receive, Send], typing.Awaitable[None]]
+
+
 def get_logger() -> logging.Logger:
     logging.basicConfig(
         format="[%(asctime)s] %(message)s",
@@ -25,20 +32,19 @@ class ASGICycleState(enum.Enum):
 
 
 class ASGICycle:
-    def __init__(self, scope: dict, spec_version: int) -> None:
+    def __init__(self, scope: Scope) -> None:
         """
         Handle ASGI application request-response cycle for Azure Functions.
         """
         self.scope = scope
         self.body = b""
-        self.spec_version = spec_version
         self.state = ASGICycleState.REQUEST
         self.app_queue = None
         self.response = {}
         self.charset = None
         self.mimetype = None
 
-    def __call__(self, app, body: bytes) -> dict:
+    def __call__(self, app: App, body: bytes) -> dict:
         """
         Receives the application and any body included in the request, then builds the
         ASGI instance using the connection scope.
@@ -46,24 +52,19 @@ class ASGICycle:
         loop = asyncio.new_event_loop()
         self.app_queue = asyncio.Queue(loop=loop)
         self.put_message({"type": "http.request", "body": body, "more_body": False})
-
-        if self.spec_version == 3:
-            asgi_instance = app(self.scope, self.receive, self.send)
-        else:
-            asgi_instance = app(self.scope)(self.receive, self.send)
-
+        asgi_instance = app(self.scope, self.receive, self.send)
         asgi_task = loop.create_task(asgi_instance)
         loop.run_until_complete(asgi_task)
         return self.response
 
-    def put_message(self, message: dict) -> None:
+    def put_message(self, message: Message) -> None:
         self.app_queue.put_nowait(message)
 
     async def receive(self) -> dict:
         message = await self.app_queue.get()
         return message
 
-    async def send(self, message: dict) -> None:
+    async def send(self, message: Message) -> None:
         message_type = message["type"]
 
         if self.state is ASGICycleState.REQUEST:
@@ -83,7 +84,13 @@ class ASGICycle:
                 if mimetype:
                     self.mimetype = mimetype
 
-            self.on_request(headers, status_code)
+            self.response["status_code"] = status_code
+            self.response["headers"] = {
+                k.decode(): v.decode() for k, v in headers.items()
+            }
+            self.response["mimetype"] = self.mimetype
+            self.response["charset"] = self.charset
+
             self.state = ASGICycleState.RESPONSE
 
         elif self.state is ASGICycleState.RESPONSE:
@@ -99,17 +106,8 @@ class ASGICycle:
             self.body += body
 
             if not more_body:
-                self.on_response()
+                self.response["body"] = self.body
                 self.put_message({"type": "http.disconnect"})
-
-    def on_request(self, headers: dict, status_code: int) -> None:
-        self.response["status_code"] = status_code
-        self.response["headers"] = {k.decode(): v.decode() for k, v in headers.items()}
-        self.response["mimetype"] = self.mimetype
-        self.response["charset"] = self.charset
-
-    def on_response(self) -> None:
-        self.response["body"] = self.body
 
 
 class Lifespan:
@@ -155,16 +153,9 @@ class Lifespan:
 
 
 class Bonnette:
-    def __init__(
-        self,
-        app,
-        debug: bool = False,
-        spec_version: int = 3,
-        enable_lifespan: bool = True,
-    ) -> None:
+    def __init__(self, app, debug: bool = False, enable_lifespan: bool = True) -> None:
         self.app = app
         self.debug = debug
-        self.spec_version = spec_version
         self.enable_lifespan = enable_lifespan
         self.logger = get_logger()
 
@@ -200,7 +191,7 @@ class Bonnette:
             "headers": [[k.encode(), v.encode()] for k, v in event.headers.items()],
         }
         body = event.get_body() or b""
-        asgi_cycle = ASGICycle(scope, spec_version=self.spec_version)
+        asgi_cycle = ASGICycle(scope)
         response = asgi_cycle(self.app, body=body)
 
         if self.enable_lifespan:

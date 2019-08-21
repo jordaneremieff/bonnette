@@ -72,36 +72,6 @@ def test_asgi_response_with_body(mock_http_request) -> None:
     assert response.mimetype == "text/html"
 
 
-def test_asgi_spec_version(mock_http_request) -> None:
-    request = mock_http_request()
-
-    def app(scope):
-        async def asgi(receive, send):
-            await send(
-                {
-                    "type": "http.response.start",
-                    "status": 200,
-                    "headers": [[b"content-type", b"text/html; charset=utf-8"]],
-                }
-            )
-            await send(
-                {
-                    "type": "http.response.body",
-                    "body": b"<html><h1>Hello, world!</h1></html>",
-                }
-            )
-
-        return asgi
-
-    handler = Bonnette(app, spec_version=2)
-    response = handler(request)
-
-    assert response.status_code == 200
-    assert response.get_body() == b"<html><h1>Hello, world!</h1></html>"
-    assert response.charset == "utf-8"
-    assert response.mimetype == "text/html"
-
-
 def test_asgi_cycle_state(mock_http_request) -> None:
     request = mock_http_request(params={"name": "val"})
 
