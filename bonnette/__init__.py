@@ -32,11 +32,12 @@ class ASGICycleState(enum.Enum):
 
 
 class ASGICycle:
-    def __init__(self, scope: Scope) -> None:
+    def __init__(self, scope: Scope, *, loop: asyncio.AbstractEventLoop) -> None:
         """
         Handle ASGI application request-response cycle for Azure Functions.
         """
         self.scope = scope
+        self.loop = loop
         self.body = b""
         self.state = ASGICycleState.REQUEST
         self.app_queue = None
@@ -49,12 +50,11 @@ class ASGICycle:
         Receives the application and any body included in the request, then builds the
         ASGI instance using the connection scope.
         """
-        loop = asyncio.new_event_loop()
-        self.app_queue = asyncio.Queue(loop=loop)
+        self.app_queue = asyncio.Queue(loop=self.loop)
         self.put_message({"type": "http.request", "body": body, "more_body": False})
         asgi_instance = app(self.scope, self.receive, self.send)
-        asgi_task = loop.create_task(asgi_instance)
-        loop.run_until_complete(asgi_task)
+        asgi_task = self.loop.create_task(asgi_instance)
+        self.loop.run_until_complete(asgi_task)
         return self.response
 
     def put_message(self, message: Message) -> None:
@@ -158,12 +158,13 @@ class Bonnette:
         self.debug = debug
         self.enable_lifespan = enable_lifespan
         self.logger = get_logger()
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
 
         if self.enable_lifespan:
-            loop = asyncio.get_event_loop()
             self.lifespan = Lifespan(self.app, logger=self.logger)
-            loop.create_task(self.lifespan.run())
-            loop.run_until_complete(self.lifespan.wait_startup())
+            self.loop.create_task(self.lifespan.run())
+            self.loop.run_until_complete(self.lifespan.wait_startup())
 
     def __call__(self, event: HttpRequest) -> HttpResponse:
         try:
@@ -178,25 +179,25 @@ class Bonnette:
         query_string = (
             urllib.parse.urlencode(event.params).encode() if event.params else b""
         )
+        path = parsed_url.path
         scope = {
             "type": "http",
             "server": None,
             "client": None,
             "method": event.method,
             "raw_path": None,
-            "path": parsed_url.path,
+            "path": path,
             "scheme": parsed_url.scheme,
             "http_version": "1.1",
             "query_string": query_string,
             "headers": [[k.encode(), v.encode()] for k, v in event.headers.items()],
         }
         body = event.get_body() or b""
-        asgi_cycle = ASGICycle(scope)
+        asgi_cycle = ASGICycle(scope, loop=self.loop)
         response = asgi_cycle(self.app, body=body)
 
         if self.enable_lifespan:
-            loop = asyncio.get_event_loop()
-            loop.run_until_complete(self.lifespan.wait_shutdown())
+            self.loop.run_until_complete(self.lifespan.wait_shutdown())
 
         return HttpResponse(
             body=response["body"],

@@ -1,15 +1,20 @@
+import re
+import os
 from setuptools import find_packages, setup
-
-from bonnette.__version__ import __version__
 
 
 def get_long_description():
     return open("README.md", "r", encoding="utf8").read()
 
 
+def get_version(package):
+    with open(os.path.join(package, "__version__.py")) as f:
+        return re.search("__version__ = ['\"]([^'\"]+)['\"]", f.read()).group(1)
+
+
 setup(
     name="bonnette",
-    version=__version__,
+    version=get_version("bonnette"),
     packages=find_packages(),
     license="MIT",
     url="https://github.com/erm/bonnette",
@@ -17,7 +22,6 @@ setup(
     long_description=get_long_description(),
     install_requires=["azure-functions"],
     package_data={"bonnette": ["py.typed"]},
-    entry_points={"console_scripts": ["cli = bonnette.__main__:main"]},
     long_description_content_type="text/markdown",
     author="Jordan Eremieff",
     author_email="jordan@eremieff.com",
