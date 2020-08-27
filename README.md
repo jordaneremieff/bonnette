@@ -1,5 +1,7 @@
 # Bonnette
 
+**THIS PROJECT IS UNMAINTAINED**: If you would like to see this properly supported, please make a comment on the issue here https://github.com/jordaneremieff/mangum/issues/86.
+
 ASGI adapter for Azure Functions.
 
 <a href="https://pypi.org/project/bonnette/">
