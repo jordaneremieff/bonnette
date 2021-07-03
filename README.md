@@ -2,6 +2,8 @@
 
 **THIS PROJECT IS UNMAINTAINED**
 
+Use the official ASGI support instead: https://github.com/Azure/azure-functions-python-library.
+
 ASGI adapter for Azure Functions.
 
 <a href="https://pypi.org/project/bonnette/">
